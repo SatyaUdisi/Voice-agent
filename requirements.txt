@@ -1,0 +1,41 @@
+# ---- Core ----
+pydantic>=2.6,<3
+pydantic-settings>=2.2,<3
+python-dotenv>=1.0
+
+# ---- AI / OpenAI ----
+openai>=1.30
+
+# ---- Backend ----
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12.0
+
+# ---- GUI ----
+PySide6>=6.6
+
+# ---- Voice / Audio ----
+# Optional at runtime; the app degrades gracefully if these are missing.
+sounddevice>=0.4.6
+numpy>=1.26
+
+# ---- Automation ----
+playwright>=1.43
+pyautogui>=0.9.54
+psutil>=5.9
+pyperclip>=1.8
+
+# ---- Vision / OCR ----
+pillow>=10.0
+# pytesseract is optional (requires the tesseract binary). See docs/INSTALLATION.md
+pytesseract>=0.3.10
+
+# ---- Windows-only (installed only on Windows) ----
+pywin32>=306 ; sys_platform == "win32"
+wmi>=1.5.1 ; sys_platform == "win32"
+
+# ---- Dev / Test ----
+pytest>=8.0
+pytest-asyncio>=0.23
+ruff>=0.4
+mypy>=1.9
