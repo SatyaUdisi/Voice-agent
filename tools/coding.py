@@ -1,0 +1,192 @@
+"""Coding tools: generate/edit code, run Python, scaffold projects, git.
+
+``run_python`` executes in a subprocess with a timeout so a runaway script
+cannot hang the agent. Code generation/debugging uses the LLM when a key is
+configured.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+from tools.base import Tool, ToolContext, ToolResult, tool
+
+
+def _llm(ctx: ToolContext, system: str, user: str) -> ToolResult:
+    settings = ctx.settings
+    if settings is None or not getattr(settings, "has_openai", False):
+        return ToolResult.failure("This tool needs a configured OpenAI API key.")
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=settings.openai_api_key)
+        resp = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        )
+        return ToolResult.success(resp.choices[0].message.content or "")
+    except Exception as exc:  # noqa: BLE001
+        return ToolResult.failure(f"LLM request failed: {exc}")
+
+
+@tool(
+    "generate_code",
+    "Generate code for a described task in a given language.",
+    {
+        "type": "object",
+        "properties": {
+            "task": {"type": "string"},
+            "language": {"type": "string", "default": "python"},
+        },
+        "required": ["task"],
+    },
+    category="coding",
+)
+def generate_code(ctx: ToolContext, task: str, language: str = "python") -> ToolResult:
+    return _llm(
+        ctx,
+        f"You are an expert {language} developer. Output only code, no prose.",
+        task,
+    )
+
+
+@tool(
+    "debug_code",
+    "Explain and fix a bug given code and an error message.",
+    {
+        "type": "object",
+        "properties": {"code": {"type": "string"}, "error": {"type": "string", "default": ""}},
+        "required": ["code"],
+    },
+    category="coding",
+)
+def debug_code(ctx: ToolContext, code: str, error: str = "") -> ToolResult:
+    return _llm(
+        ctx,
+        "You are a debugging expert. Identify the bug and return the corrected code.",
+        f"CODE:\n{code}\n\nERROR:\n{error}",
+    )
+
+
+@tool(
+    "run_python",
+    "Run a Python snippet in a subprocess and capture stdout/stderr.",
+    {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string"},
+            "timeout": {"type": "integer", "default": 15},
+        },
+        "required": ["code"],
+    },
+    category="coding",
+)
+def run_python(ctx: ToolContext, code: str, timeout: int = 15) -> ToolResult:
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return ToolResult.failure(f"Execution timed out after {timeout}s.")
+    ok = proc.returncode == 0
+    output = (proc.stdout + (("\n" + proc.stderr) if proc.stderr else "")).strip()
+    result = ToolResult.success(output, returncode=proc.returncode) if ok else ToolResult.failure(
+        output or f"Exited with code {proc.returncode}", returncode=proc.returncode
+    )
+    return result
+
+
+@tool(
+    "run_file",
+    "Run a Python file and capture its output.",
+    {
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "timeout": {"type": "integer", "default": 30}},
+        "required": ["path"],
+    },
+    category="coding",
+)
+def run_file(ctx: ToolContext, path: str, timeout: int = 30) -> ToolResult:
+    target = Path(path).expanduser()
+    if not target.is_file():
+        return ToolResult.failure(f"File not found: {target}")
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(target)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(target.parent),
+        )
+    except subprocess.TimeoutExpired:
+        return ToolResult.failure(f"Execution timed out after {timeout}s.")
+    ok = proc.returncode == 0
+    output = (proc.stdout + (("\n" + proc.stderr) if proc.stderr else "")).strip()
+    return (
+        ToolResult.success(output, returncode=0)
+        if ok
+        else ToolResult.failure(output or f"Exited with code {proc.returncode}")
+    )
+
+
+@tool(
+    "create_project",
+    "Scaffold a minimal Python project folder with main.py and README.",
+    {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    category="coding",
+)
+def create_project(ctx: ToolContext, path: str) -> ToolResult:
+    root = Path(path).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "main.py").write_text('def main():\n    print("Hello, world!")\n\n\nif __name__ == "__main__":\n    main()\n', encoding="utf-8")
+    (root / "README.md").write_text(f"# {root.name}\n\nGenerated by Voice Agent.\n", encoding="utf-8")
+    return ToolResult.success(f"Scaffolded project at {root}", path=str(root))
+
+
+@tool(
+    "git_command",
+    "Run a whitelisted read-mostly git command in a repo directory.",
+    {
+        "type": "object",
+        "properties": {
+            "args": {"type": "array", "items": {"type": "string"}},
+            "cwd": {"type": "string", "default": "."},
+        },
+        "required": ["args"],
+    },
+    category="coding",
+)
+def git_command(ctx: ToolContext, args: list[str], cwd: str = ".") -> ToolResult:
+    allowed = {"status", "log", "diff", "branch", "add", "commit", "init", "checkout", "pull", "push", "remote"}
+    if not args or args[0] not in allowed:
+        return ToolResult.failure(f"git subcommand not allowed. Allowed: {sorted(allowed)}")
+    try:
+        proc = subprocess.run(
+            ["git", *args], capture_output=True, text=True, timeout=30, cwd=cwd
+        )
+    except FileNotFoundError:
+        return ToolResult.failure("git is not installed.")
+    except subprocess.TimeoutExpired:
+        return ToolResult.failure("git command timed out.")
+    output = (proc.stdout + proc.stderr).strip()
+    return (
+        ToolResult.success(output or "(ok)")
+        if proc.returncode == 0
+        else ToolResult.failure(output or "git command failed")
+    )
+
+
+def get_tools() -> list[Tool]:
+    return [
+        generate_code,
+        debug_code,
+        run_python,
+        run_file,
+        create_project,
+        git_command,
+    ]

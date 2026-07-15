@@ -1,0 +1,35 @@
+[project]
+name = "voice-agent"
+version = "1.0.0"
+description = "A production-quality desktop AI voice agent with a futuristic GUI."
+requires-python = ">=3.10"
+readme = "README.md"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "S"]
+ignore = [
+    "E501",   # line length handled by formatter
+    "S101",   # asserts are fine in tests
+    "N802",   # Qt uses camelCase overrides
+    "B008",   # FastAPI dependency defaults
+    "S603",   # subprocess use is intentional (desktop/coding automation)
+    "S607",   # partial exe paths resolved via PATH by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "N"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true
